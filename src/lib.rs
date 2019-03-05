@@ -8,7 +8,7 @@ use std::{
 const W: u8 = 6;
 
 struct Ctrie<K, V> {
-    root: Atomic<InternalNode<K, V>>,
+    root: Atomic<IndirectionNode<K, V>>,
 }
 
 impl<K, V> Ctrie<K, V>
@@ -17,7 +17,11 @@ where
     V: Clone,
 {
     fn new() -> Self {
-        Self { root: Atomic::new(InternalNode::new(MainNode::Ctrie(Atomic::new(CtrieNode::new(0u64, vec![]))))) }
+        Self {
+            root: Atomic::new(IndirectionNode::new(Atomic::new(MainNode::Ctrie(
+                CtrieNode::new(0u64, vec![]),
+            )))),
+        }
     }
 
     fn lookup<'g>(&self, guard: &'g Guard, key: &K) -> Option<&'g V>
@@ -35,31 +39,35 @@ where
     fn insert<'g>(&self, guard: &'g Guard, key: K, value: V) {
         let root = unsafe { self.root.load(Ordering::SeqCst, guard).deref() };
         match iinsert(guard, root, key.clone(), value.clone(), 0, None) {
-            IInsertResult::Ok => {},
-            IInsertResult::Restart => { self.insert(guard, key, value) },
+            IInsertResult::Ok => {}
+            IInsertResult::Restart => self.insert(guard, key, value),
         }
     }
 
-    fn print<'g>(&self, guard: &'g Guard) where K: Debug, V: Debug {
-        println!("root:"); 
+    fn print<'g>(&self, guard: &'g Guard)
+    where
+        K: Debug,
+        V: Debug,
+    {
+        println!("root:");
         unsafe { self.root.load(Ordering::SeqCst, guard).deref() }.print(guard, 0);
     }
 }
 
 fn ilookup<'g, K, V>(
     guard: &'g Guard,
-    internal: &InternalNode<K, V>,
+    indirection: &IndirectionNode<K, V>,
     key: &K,
     level: u8,
-    parent: Option<&InternalNode<K, V>>,
+    parent: Option<&IndirectionNode<K, V>>,
 ) -> ILookupResult<'g, V>
 where
     K: 'g + Eq + Hash,
 {
-    let main = &internal.main;
+    let main_pointer = indirection.main.load(Ordering::SeqCst, guard);
+    let main = unsafe { main_pointer.deref() };
     match main {
         MainNode::Ctrie(ctrie_node) => {
-            let ctrie_node = unsafe { ctrie_node.load(Ordering::SeqCst, guard).deref() };
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             key.hash(&mut hasher);
             let hash = hasher.finish();
@@ -68,8 +76,8 @@ where
                 ILookupResult::NotFound
             } else {
                 match &ctrie_node.array[position as usize] {
-                    Branch::Internal(new_internal) => {
-                        ilookup(guard, new_internal, key, level + W, Some(internal))
+                    Branch::Indirection(new_indirection) => {
+                        ilookup(guard, new_indirection, key, level + W, Some(indirection))
                     }
                     Branch::Singleton(singleton) => {
                         if singleton.key == *key {
@@ -86,20 +94,20 @@ where
 
 fn iinsert<'g, K, V>(
     guard: &'g Guard,
-    internal: &InternalNode<K, V>,
+    indirection: &IndirectionNode<K, V>,
     key: K,
     value: V,
     level: u8,
-    parent: Option<&InternalNode<K, V>>,
+    parent: Option<&IndirectionNode<K, V>>,
 ) -> IInsertResult
 where
     K: 'g + Clone + Eq + Hash,
     V: Clone,
 {
-    let main = &internal.main;
+    let main_pointer = indirection.main.load(Ordering::SeqCst, guard);
+    let main = unsafe { main_pointer.deref() };
     match main {
-        MainNode::Ctrie(ctrie_node_pointer) => {
-            let ctrie_node = unsafe { ctrie_node_pointer.load(Ordering::SeqCst, guard).deref() };
+        MainNode::Ctrie(ctrie_node) => {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             key.hash(&mut hasher);
             let hash = hasher.finish();
@@ -107,11 +115,12 @@ where
             if ctrie_node.bitmap & flag == 0 {
                 let new_ctrie_node =
                     ctrie_node.inserted(flag, position as usize, SingletonNode::new(key, value));
-                let new_ctrie_node = Atomic::new(new_ctrie_node);
-                if ctrie_node_pointer
+                let new_main_node = Atomic::new(MainNode::Ctrie(new_ctrie_node));
+                if indirection
+                    .main
                     .compare_and_set(
-                        ctrie_node_pointer.load(Ordering::SeqCst, guard),
-                        new_ctrie_node.load(Ordering::SeqCst, guard),
+                        main_pointer,
+                        new_main_node.load(Ordering::SeqCst, guard),
                         Ordering::SeqCst,
                         guard,
                     )
@@ -123,8 +132,8 @@ where
                 }
             } else {
                 match &ctrie_node.array[position as usize] {
-                    Branch::Internal(new_internal) => {
-                        iinsert(guard, new_internal, key, value, level + W, Some(internal))
+                    Branch::Indirection(new_indirection) => {
+                        iinsert(guard, new_indirection, key, value, level + W, Some(indirection))
                     }
                     Branch::Singleton(singleton) => {
                         if singleton.key != key {
@@ -137,21 +146,22 @@ where
                             singleton.key.hash(&mut hasher);
                             let singleton_key_hash = hasher.finish();
 
-                            let new_internal_node =
-                                Branch::Internal(InternalNode::new(MainNode::new(
+                            let new_indirection_node =
+                                Branch::Indirection(IndirectionNode::new(Atomic::new(MainNode::new(
                                     singleton.clone(),
                                     singleton_key_hash,
                                     new_singleton_node,
                                     new_singleton_key_hash,
                                     level + W,
-                                )));
-                            let new_ctrie_node = Atomic::new(
-                                ctrie_node.updated(position as usize, new_internal_node),
-                            );
-                            if ctrie_node_pointer
+                                ))));
+                            let new_main_node = Atomic::new(MainNode::Ctrie(
+                                ctrie_node.updated(position as usize, new_indirection_node),
+                            ));
+                            if indirection
+                                .main
                                 .compare_and_set(
-                                    ctrie_node_pointer.load(Ordering::SeqCst, guard),
-                                    new_ctrie_node.load(Ordering::SeqCst, guard),
+                                    main_pointer,
+                                    new_main_node.load(Ordering::SeqCst, guard),
                                     Ordering::SeqCst,
                                     guard,
                                 )
@@ -162,14 +172,16 @@ where
                                 IInsertResult::Restart
                             }
                         } else {
-                            let new_ctrie_node = Atomic::new(ctrie_node.updated(
+                            let new_ctrie_node = ctrie_node.updated(
                                 position as usize,
                                 Branch::Singleton(SingletonNode::new(key, value)),
-                            ));
-                            if ctrie_node_pointer
+                            );
+                            let new_main_node = Atomic::new(MainNode::Ctrie(new_ctrie_node));
+                            if indirection
+                                .main
                                 .compare_and_set(
-                                    ctrie_node_pointer.load(Ordering::SeqCst, guard),
-                                    new_ctrie_node.load(Ordering::SeqCst, guard),
+                                    main_pointer,
+                                    new_main_node.load(Ordering::SeqCst, guard),
                                     Ordering::SeqCst,
                                     guard,
                                 )
@@ -199,20 +211,31 @@ enum ILookupResult<'g, V> {
 }
 
 #[derive(Clone)]
-struct InternalNode<K, V> {
-    main: MainNode<K, V>,
+struct IndirectionNode<K, V> {
+    main: Atomic<MainNode<K, V>>,
 }
 
-impl<K, V> InternalNode<K, V> where K: Clone, V: Clone {
-    fn new(main: MainNode<K, V>) -> Self {
+impl<K, V> IndirectionNode<K, V>
+where
+    K: Clone,
+    V: Clone,
+{
+    fn new(main: Atomic<MainNode<K, V>>) -> Self {
         Self { main }
     }
 
-    fn print<'g>(&self, guard: &'g Guard, indent: usize) where K: Debug, V: Debug, {
-        println!("{}internal:", std::iter::repeat(' ').take(indent).collect::<String>());
-        match &self.main {
+    fn print<'g>(&self, guard: &'g Guard, indent: usize)
+    where
+        K: Debug,
+        V: Debug,
+    {
+        println!(
+            "{}indirection:",
+            std::iter::repeat(' ').take(indent).collect::<String>()
+        );
+        match unsafe { self.main.load(Ordering::SeqCst, guard).deref() } {
             MainNode::Ctrie(ctrie_node) => {
-                unsafe { ctrie_node.load(Ordering::SeqCst, guard).deref() }.print(guard, indent);
+                ctrie_node.print(guard, indent);
             }
         }
     }
@@ -220,7 +243,7 @@ impl<K, V> InternalNode<K, V> where K: Clone, V: Clone {
 
 #[derive(Clone)]
 enum MainNode<K, V> {
-    Ctrie(Atomic<CtrieNode<K, V>>),
+    Ctrie(CtrieNode<K, V>),
 }
 
 impl<K, V> MainNode<K, V>
@@ -241,21 +264,18 @@ where
 
         match x_index.cmp(&y_index) {
             std::cmp::Ordering::Equal => {
-                let main = MainNode::new(x, x_hash, y, y_hash, level + W);
-                let internal = InternalNode::new(main);
-                MainNode::Ctrie(Atomic::new(CtrieNode::new(
-                    bitmap,
-                    vec![Branch::Internal(internal)],
-                )))
+                let main = Atomic::new(MainNode::new(x, x_hash, y, y_hash, level + W));
+                let indirection = IndirectionNode::new(main);
+                MainNode::Ctrie(CtrieNode::new(bitmap, vec![Branch::Indirection(indirection)]))
             }
-            std::cmp::Ordering::Less => MainNode::Ctrie(Atomic::new(CtrieNode::new(
+            std::cmp::Ordering::Less => MainNode::Ctrie(CtrieNode::new(
                 bitmap,
                 vec![Branch::Singleton(x), Branch::Singleton(y)],
-            ))),
-            std::cmp::Ordering::Greater => MainNode::Ctrie(Atomic::new(CtrieNode::new(
+            )),
+            std::cmp::Ordering::Greater => MainNode::Ctrie(CtrieNode::new(
                 bitmap,
                 vec![Branch::Singleton(y), Branch::Singleton(x)],
-            ))),
+            )),
         }
     }
 }
@@ -287,7 +307,11 @@ where
         new
     }
 
-    fn print<'g>(&self, guard: &'g Guard, indent: usize) where K: Debug, V: Debug, {
+    fn print<'g>(&self, guard: &'g Guard, indent: usize)
+    where
+        K: Debug,
+        V: Debug,
+    {
         let tab = std::iter::repeat(' ').take(indent).collect::<String>();
         println!("{}ctrie:", tab);
         println!("{}bitmap: {:064b}", tab, self.bitmap);
@@ -295,7 +319,7 @@ where
         for branch in &self.array {
             match branch {
                 Branch::Singleton(singleton_node) => singleton_node.print(indent + 2),
-                Branch::Internal(internal_node) => internal_node.print(guard, indent + 2),
+                Branch::Indirection(indirection_node) => indirection_node.print(guard, indent + 2),
             }
         }
     }
@@ -312,7 +336,11 @@ impl<K, V> SingletonNode<K, V> {
         Self { key, value }
     }
 
-    fn print(&self, indent: usize) where K: std::fmt::Debug, V: std::fmt::Debug {
+    fn print(&self, indent: usize)
+    where
+        K: std::fmt::Debug,
+        V: std::fmt::Debug,
+    {
         let tab = std::iter::repeat(' ').take(indent).collect::<String>();
         print!("{}singleton: ", tab);
         println!("({:?}, {:?})", self.key, self.value);
@@ -321,7 +349,7 @@ impl<K, V> SingletonNode<K, V> {
 
 #[derive(Clone)]
 enum Branch<K, V> {
-    Internal(InternalNode<K, V>),
+    Indirection(IndirectionNode<K, V>),
     Singleton(SingletonNode<K, V>),
 }
 
