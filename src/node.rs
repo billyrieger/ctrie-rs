@@ -9,7 +9,7 @@ pub use self::{
     ctrie::{Branch, CtrieNode},
     indirection::IndirectionNode,
     list::ListNode,
-    main::MainNode,
+    main::{MainNode, MainNodeKind},
     singleton::SingletonNode,
     tomb::TombNode,
 };

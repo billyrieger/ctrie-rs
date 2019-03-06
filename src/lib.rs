@@ -2,11 +2,11 @@ use crossbeam::epoch::{Atomic, Guard};
 use std::{
     fmt::Debug,
     hash::{Hash, Hasher},
-    sync::atomic::Ordering,
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
 };
 
 mod node;
+
 use self::node::*;
 
 const W: usize = 6;
@@ -21,6 +21,15 @@ struct Generation {
     inner: Arc<u8>,
 }
 
+impl Generation {
+    fn new() -> Self {
+        Self {
+            // answer to the ultimate question of life, the universe, and everything
+            inner: Arc::new(42),
+        }
+    }
+}
+
 impl PartialEq for Generation {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
@@ -28,10 +37,6 @@ impl PartialEq for Generation {
 }
 
 impl Eq for Generation {}
-
-struct TombNode<K, V> {
-    singleton: SingletonNode<K, V>,
-}
 
 enum IInsertResult {
     Ok,
@@ -49,11 +54,19 @@ where
     K: Clone + Eq + Hash,
     V: Clone,
 {
+    fn root(&self) -> &Atomic<IndirectionNode<K, V>> {
+        &self.root
+    }
+
+    fn read_only(&self) -> bool {
+        self.read_only
+    }
+
     pub fn new() -> Self {
         Self {
-            root: Atomic::new(IndirectionNode::new(Atomic::new(MainNode::Ctrie(
-                CtrieNode::new(0u64, vec![]),
-            )))),
+            root: Atomic::new(IndirectionNode::new(Atomic::new(
+                MainNode::from_ctrie_node(CtrieNode::new(0u64, vec![])),
+            ))),
             read_only: false,
         }
     }
@@ -101,8 +114,8 @@ where
 {
     let main_pointer = indirection.load_main(Ordering::SeqCst, guard);
     let main = unsafe { main_pointer.deref() };
-    match main {
-        MainNode::Ctrie(ctrie_node) => {
+    match main.kind() {
+        MainNodeKind::Ctrie(ctrie_node) => {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             key.hash(&mut hasher);
             let hash = hasher.finish();
@@ -125,13 +138,34 @@ where
                 }
             }
         }
-        MainNode::List(list_node) => {
-            if let Some(value) = list_node.lookup(guard, key) {
+
+        MainNodeKind::List(lnode) => {
+            if let Some(value) = lnode.lookup(guard, key) {
                 ILookupResult::Value(value)
             } else {
                 ILookupResult::NotFound
             }
         }
+
+        MainNodeKind::Tomb(_) => {
+            clean(parent.unwrap(), level - W, guard);
+            ILookupResult::Restart
+        }
+
+        MainNodeKind::Failed => unimplemented!(),
+    }
+}
+
+fn clean<'g, K, V>(inode: &IndirectionNode<K, V>, level: usize, guard: &'g Guard) -> bool
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    let main_pointer = inode.load_main(Ordering::SeqCst, guard);
+    let main = unsafe { main_pointer.deref() };
+    match main.kind() {
+        MainNodeKind::Ctrie(cnode) => unimplemented!(),
+        _ => true,
     }
 }
 
@@ -149,8 +183,8 @@ where
 {
     let main_pointer = indirection.load_main(Ordering::SeqCst, guard);
     let main = unsafe { main_pointer.deref() };
-    match main {
-        MainNode::Ctrie(ctrie_node) => {
+    match main.kind() {
+        MainNodeKind::Ctrie(ctrie_node) => {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             key.hash(&mut hasher);
             let hash = hasher.finish();
@@ -159,9 +193,13 @@ where
             if bitmap & flag == 0 {
                 let new_ctrie_node =
                     ctrie_node.inserted(flag, position as usize, SingletonNode::new(key, value));
-                let new_main_node = Atomic::new(MainNode::Ctrie(new_ctrie_node));
-                if indirection.cas_main(main_pointer, new_main_node.load(Ordering::SeqCst, guard), Ordering::SeqCst, guard)
-                {
+                let new_main_node = Atomic::new(MainNode::from_ctrie_node(new_ctrie_node));
+                if indirection.cas_main(
+                    main_pointer,
+                    new_main_node.load(Ordering::SeqCst, guard),
+                    Ordering::SeqCst,
+                    guard,
+                ) {
                     IInsertResult::Ok
                 } else {
                     IInsertResult::Restart
@@ -196,7 +234,7 @@ where
                                     level + W,
                                 )),
                             ));
-                            Atomic::new(MainNode::Ctrie(
+                            Atomic::new(MainNode::from_ctrie_node(
                                 ctrie_node.updated(position as usize, new_indirection_node),
                             ))
                         } else {
@@ -204,10 +242,14 @@ where
                                 position as usize,
                                 Branch::Singleton(SingletonNode::new(key, value)),
                             );
-                            Atomic::new(MainNode::Ctrie(new_ctrie_node))
+                            Atomic::new(MainNode::from_ctrie_node(new_ctrie_node))
                         };
-                        if indirection.cas_main(main_pointer, new_main_node.load(Ordering::SeqCst, guard), Ordering::SeqCst, guard)
-                        {
+                        if indirection.cas_main(
+                            main_pointer,
+                            new_main_node.load(Ordering::SeqCst, guard),
+                            Ordering::SeqCst,
+                            guard,
+                        ) {
                             IInsertResult::Ok
                         } else {
                             IInsertResult::Restart
@@ -216,14 +258,72 @@ where
                 }
             }
         }
-        MainNode::List(list_node) => {
+
+        MainNodeKind::List(lnode) => {
             if unimplemented!() {
                 IInsertResult::Ok
             } else {
                 IInsertResult::Restart
             }
         }
+
+        MainNodeKind::Tomb(tnode) => unimplemented!(),
+
+        MainNodeKind::Failed => unimplemented!(),
     }
+}
+
+fn iremove<'g, K, V>(
+    inode: &IndirectionNode<K, V>,
+    key: &K,
+    level: usize,
+    parent: Option<&IndirectionNode<K, V>>,
+    guard: &'g Guard,
+) -> IRemoveResult<V>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    let main_pointer = inode.load_main(Ordering::SeqCst, guard);
+    let main = unsafe { main_pointer.deref() };
+    match main.kind() {
+        MainNodeKind::Ctrie(cnode) => {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut hasher);
+            let hash = hasher.finish();
+            let bitmap = cnode.bitmap();
+            let (flag, position) = flag_and_position(hash, level, bitmap);
+            if bitmap & flag == 0 {
+                let res = match cnode.get_branch(position) {
+                    Branch::Indirection(child_inode) => {
+                        iremove(child_inode, key, level + W, Some(inode), guard)
+                    }
+                    Branch::Singleton(child_snode) => {
+                        if &child_snode.key != key {
+                            IRemoveResult::NotFound
+                        } else {
+                            unimplemented!()
+                        }
+                    }
+                };
+                unimplemented!()
+            } else {
+                unimplemented!()
+            }
+        }
+
+        MainNodeKind::List(lnode) => unimplemented!(),
+
+        MainNodeKind::Tomb(tnode) => unimplemented!(),
+
+        MainNodeKind::Failed => unimplemented!(),
+    }
+}
+
+enum IRemoveResult<V> {
+    Value(V),
+    NotFound,
+    Restart,
 }
 
 fn flag_and_position(hash: u64, level: usize, bitmap: u64) -> (u64, usize) {

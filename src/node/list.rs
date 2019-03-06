@@ -12,15 +12,22 @@ impl<K, V> ListNode<K, V>
 where
     K: Eq,
 {
+    pub fn new(singleton: SingletonNode<K, V>) -> Self {
+        Self {
+            singleton,
+            next: None,
+        }
+    }
+
     pub fn lookup<'g>(&'g self, guard: &'g Guard, key: &K) -> Option<&'g V> {
         if self.singleton.key == *key {
             Some(&self.singleton.value)
+        } else if let Some(next) = &self.next {
+            let next_pointer = next.load(Ordering::SeqCst, guard);
+            let next = unsafe { next_pointer.deref() };
+            next.lookup(guard, key)
         } else {
-            if let Some(next) = &self.next {
-                unsafe { next.load(Ordering::SeqCst, guard).deref() }.lookup(guard, key)
-            } else {
-                None
-            }
+            None
         }
     }
 }

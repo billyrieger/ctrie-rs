@@ -1,7 +1,7 @@
-use crate::node::SingletonNode;
-use crate::node::IndirectionNode;
-use crossbeam::epoch::{Guard};
+use crate::node::{IndirectionNode, SingletonNode};
+use crossbeam::epoch::Guard;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 #[derive(Clone)]
 pub enum Branch<K, V> {
@@ -49,8 +49,8 @@ where
 impl<K, V> CtrieNode<K, V> {
     pub fn print<'g>(&self, guard: &'g Guard, indent: usize)
     where
-        K: Debug,
-        V: Debug,
+        K: Clone + Debug + Eq + Hash,
+        V: Clone + Debug,
     {
         let tab = std::iter::repeat(' ').take(indent).collect::<String>();
         println!("{}ctrie:", tab);
