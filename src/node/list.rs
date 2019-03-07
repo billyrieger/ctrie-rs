@@ -79,7 +79,8 @@ where
             } else {
                 // at this point tail_ptr is not null
                 let tail = unsafe { tail_ptr.deref() };
-                // recursively remove the element from the tail
+                // recursively remove the element from the tail and return a new list with the new
+                // tail as the tail
                 let (maybe_new_tail, did_remove) = tail.remove(key, guard);
                 let new_list = if let Some(new_tail) = maybe_new_tail {
                     Self { 
@@ -109,13 +110,13 @@ where
             loop {
                 if tail_ptr.is_null() {
                     // end of the list
-                    break None;
+                    return None;
                 } else {
                     // at this point tail_ptr is not null
                     let tail = unsafe { tail_ptr.deref() };
                     if key == tail.head.key() {
                         // key found
-                        break Some(tail.head.value());
+                        return Some(tail.head.value());
                     } else {
                         // continue searching
                         tail_ptr = tail.tail.load(LOAD_ORD, guard);
@@ -133,6 +134,7 @@ mod test {
 
     #[test]
     fn add_lookup_remove() {
+        // [('a', 1), ('b', 2), ('c', 3)]
         let list = ListNode::new('c', 3).add('b', 2).add('a', 1);
 
         let guard = &epoch::pin();

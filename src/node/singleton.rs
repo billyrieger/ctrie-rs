@@ -8,7 +8,7 @@ pub struct SingletonNode<K, V> {
 }
 
 impl<K, V> SingletonNode<K, V> {
-    /// Creats a new singleton node with the given key and value.
+    /// Creates a new singleton node with the given key and value.
     pub fn new(key: K, value: V) -> Self {
         Self { key, value }
     }
