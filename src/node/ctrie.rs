@@ -3,8 +3,7 @@ use crate::{
     Ctrie, Generation, Key, Value,
 };
 use crossbeam::epoch::Guard;
-use std::hash::BuildHasher;
-use std::fmt::Debug;
+use std::{fmt::Debug, hash::BuildHasher};
 
 #[derive(Clone)]
 pub enum Branch<K, V> {
@@ -92,7 +91,11 @@ where
         &self.generation
     }
 
-    pub fn print<'g>(&self, indent: usize, guard: &'g Guard) where K: Debug, V: Debug {
+    pub fn print<'g>(&self, indent: usize, guard: &'g Guard)
+    where
+        K: Debug,
+        V: Debug,
+    {
         let tab = std::iter::repeat(' ').take(indent).collect::<String>();
         println!("{}cnode:", tab);
         println!("{}bitmap: {:064b}", tab, self.bitmap);

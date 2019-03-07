@@ -109,7 +109,14 @@ where
     pub fn with_hasher(hash_builder: S) -> Self {
         let generation = Generation::new();
         Self {
-            root: Atomic::new(IndirectionNode::new(Atomic::new(MainNode::from_ctrie_node(CtrieNode::new(0, vec![], generation.clone()))), generation)),
+            root: Atomic::new(IndirectionNode::new(
+                Atomic::new(MainNode::from_ctrie_node(CtrieNode::new(
+                    0,
+                    vec![],
+                    generation.clone(),
+                ))),
+                generation,
+            )),
             read_only: false,
             hash_builder,
         }
@@ -118,8 +125,15 @@ where
     pub fn insert<'g>(&self, key: K, value: V, guard: &'g Guard) {
         let root_ptr = self.root().load(LOAD_ORD, guard);
         let root = unsafe { root_ptr.deref() };
-        match self.iinsert(root, key.clone(), value.clone(), 0, root.generation(), guard) {
-            IInsertResult::Ok => {},
+        match self.iinsert(
+            root,
+            key.clone(),
+            value.clone(),
+            0,
+            root.generation(),
+            guard,
+        ) {
+            IInsertResult::Ok => {}
             IInsertResult::Restart => self.insert(key, value, guard),
         }
     }
@@ -237,7 +251,11 @@ where
         }
     }
 
-    fn print<'g>(&self, guard: &'g Guard) where K: Debug, V: Debug {
+    fn print<'g>(&self, guard: &'g Guard)
+    where
+        K: Debug,
+        V: Debug,
+    {
         println!("ctrie:");
         let root_ptr = self.root.load(LOAD_ORD, guard);
         let root = unsafe { root_ptr.deref() };
@@ -268,4 +286,3 @@ mod tests {
         ctrie.print(guard);
     }
 }
-

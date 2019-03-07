@@ -25,7 +25,11 @@ impl<K, V> SingletonNode<K, V> {
         &self.value
     }
 
-    pub fn print(&self, indent: usize) where K: Debug, V: Debug {
+    pub fn print(&self, indent: usize)
+    where
+        K: Debug,
+        V: Debug,
+    {
         let tab = std::iter::repeat(' ').take(indent).collect::<String>();
         println!("{}snode: ({:?}, {:?})", tab, self.key, self.value);
     }

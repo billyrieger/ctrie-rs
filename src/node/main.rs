@@ -3,8 +3,7 @@ use crate::{
     Generation, Key, Value, LAST_W_BITS, W,
 };
 use crossbeam::epoch::{Atomic, Guard};
-use std::cmp;
-use std::fmt::Debug;
+use std::{cmp, fmt::Debug};
 
 #[derive(Clone)]
 pub enum MainNodeKind<K, V> {
@@ -111,7 +110,11 @@ where
         &self.prev
     }
 
-    pub fn print<'g>(&self, indent: usize, guard: &'g Guard) where K: Debug, V: Debug {
+    pub fn print<'g>(&self, indent: usize, guard: &'g Guard)
+    where
+        K: Debug,
+        V: Debug,
+    {
         let tab = std::iter::repeat(' ').take(indent).collect::<String>();
         println!("{}main:", tab);
         match &self.kind {

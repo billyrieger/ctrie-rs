@@ -1,7 +1,6 @@
 use crate::{gcas::*, node::MainNode, Ctrie, Generation, Key, Value, LOAD_ORD};
 use crossbeam::epoch::{Atomic, Guard};
-use std::hash::BuildHasher;
-use std::fmt::Debug;
+use std::{fmt::Debug, hash::BuildHasher};
 
 pub struct IndirectionNode<K, V> {
     main: Atomic<MainNode<K, V>>,
@@ -38,7 +37,11 @@ where
         &self.generation
     }
 
-    pub fn print<'g>(&self, indent: usize, guard: &'g Guard) where K: Debug, V: Debug {
+    pub fn print<'g>(&self, indent: usize, guard: &'g Guard)
+    where
+        K: Debug,
+        V: Debug,
+    {
         let tab = std::iter::repeat(' ').take(indent).collect::<String>();
         println!("{}inode:", tab);
         let main_ptr = self.main.load(LOAD_ORD, guard);
