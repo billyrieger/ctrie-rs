@@ -1,16 +1,5 @@
-use crate::{node::MainNode, Generation};
-use crate::{Key, Value};
+use crate::{node::MainNode, Generation, Key, Value};
 use crossbeam::epoch::Atomic;
-
-pub enum INodeOrRdcss<K, V> {
-    INode(IndirectionNode<K, V>),
-    Rdcss(RdcssDescriptor<K, V>),
-}
-
-pub struct RdcssDescriptor<K, V> {
-    key: K,
-    value: V,
-}
 
 pub struct IndirectionNode<K, V> {
     main: Atomic<MainNode<K, V>>,

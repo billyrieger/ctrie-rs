@@ -1,5 +1,7 @@
-use crate::node::{CtrieNode, ListNode, TombNode};
-use crate::{Key, Value};
+use crate::{
+    node::{CtrieNode, ListNode, TombNode},
+    Key, Value,
+};
 use crossbeam::epoch::Atomic;
 
 #[derive(Clone)]
@@ -16,7 +18,11 @@ pub struct MainNode<K, V> {
     prev: Atomic<MainNode<K, V>>,
 }
 
-impl<K, V> MainNode<K, V> where K: Key, V: Value {
+impl<K, V> MainNode<K, V>
+where
+    K: Key,
+    V: Value,
+{
     pub fn failed(prev: Atomic<MainNode<K, V>>) -> Self {
         Self {
             kind: MainNodeKind::Failed,

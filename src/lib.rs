@@ -6,8 +6,8 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 
-mod node;
 mod gcas;
+mod node;
 
 use self::node::*;
 

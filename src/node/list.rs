@@ -83,12 +83,12 @@ where
                 // tail as the tail
                 let (maybe_new_tail, did_remove) = tail.remove(key, guard);
                 let new_list = if let Some(new_tail) = maybe_new_tail {
-                    Self { 
+                    Self {
                         head: self.head.clone(),
                         tail: Atomic::new(new_tail),
                     }
                 } else {
-                    Self { 
+                    Self {
                         head: self.head.clone(),
                         tail: Atomic::null(),
                     }

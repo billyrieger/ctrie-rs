@@ -1,12 +1,8 @@
-use crate::node::IndirectionNode;
-use crate::node::MainNode;
-use crate::node::MainNodeKind;
-use crate::Ctrie;
-use crate::{Key, Value, CAS_ORD, LOAD_ORD, STORE_ORD};
-use crossbeam::epoch::Atomic;
-use crossbeam::epoch::Guard;
-use crossbeam::epoch::Owned;
-use crossbeam::epoch::Shared;
+use crate::{
+    node::{IndirectionNode, MainNode, MainNodeKind},
+    Ctrie, Key, Value, CAS_ORD, LOAD_ORD, STORE_ORD,
+};
+use crossbeam::epoch::{Atomic, Guard, Owned, Shared};
 
 fn gcas<'g, K, V>(
     inode: &IndirectionNode<K, V>,
@@ -24,7 +20,11 @@ where
     // store the previous value in case we need to reset
     new.prev().store(old_ptr, STORE_ORD);
 
-    if inode.main().compare_and_set(old_ptr, new_ptr, CAS_ORD, guard).is_ok() {
+    if inode
+        .main()
+        .compare_and_set(old_ptr, new_ptr, CAS_ORD, guard)
+        .is_ok()
+    {
         gcas_commit(inode, new_ptr, ctrie, guard);
         new.prev().load(LOAD_ORD, guard).is_null()
     } else {
@@ -84,7 +84,11 @@ where
         match prev.kind() {
             MainNodeKind::Failed => {
                 let failed_prev_ptr = prev.prev().load(LOAD_ORD, guard);
-                if inode.main().compare_and_set(main_ptr, failed_prev_ptr, CAS_ORD, guard).is_ok() {
+                if inode
+                    .main()
+                    .compare_and_set(main_ptr, failed_prev_ptr, CAS_ORD, guard)
+                    .is_ok()
+                {
                     failed_prev_ptr
                 } else {
                     let new_main_ptr = inode.main().load(LOAD_ORD, guard);
@@ -93,7 +97,11 @@ where
             }
             _ => {
                 if root.generation() == inode.generation() && !ctrie.read_only() {
-                    if main.prev().compare_and_set(prev_ptr, Shared::null(), CAS_ORD, guard).is_ok() {
+                    if main
+                        .prev()
+                        .compare_and_set(prev_ptr, Shared::null(), CAS_ORD, guard)
+                        .is_ok()
+                    {
                         main_ptr
                     } else {
                         gcas_commit(inode, main_ptr, ctrie, guard)
@@ -102,7 +110,9 @@ where
                     let failed = MainNode::failed(Atomic::new(prev.clone()));
                     let failed_ptr = Owned::new(failed).into_shared(guard);
                     // TODO: ?
-                    main.prev().compare_and_set(prev_ptr, failed_ptr, CAS_ORD, guard).is_ok();
+                    main.prev()
+                        .compare_and_set(prev_ptr, failed_ptr, CAS_ORD, guard)
+                        .is_ok();
 
                     let new_main_ptr = inode.main().load(LOAD_ORD, guard);
                     gcas_commit(inode, new_main_ptr, ctrie, guard)
