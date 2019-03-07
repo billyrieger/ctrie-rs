@@ -6,3 +6,4 @@ edition = "2018"
 
 [dependencies]
 crossbeam = "0.7"
+fxhash = "0.2"

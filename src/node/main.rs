@@ -1,6 +1,4 @@
-use crate::{
-    node::{CtrieNode, ListNode, TombNode},
-};
+use crate::node::{CtrieNode, ListNode, TombNode};
 use crossbeam::epoch::Atomic;
 
 #[derive(Clone)]
