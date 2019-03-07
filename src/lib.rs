@@ -220,7 +220,6 @@ impl<K, V> Ctrie<K, V> {
                     } else {
                         println!("foo");
                         self.print(guard);
-                        std::thread::sleep_ms(1000);
                         IInsertResult::Restart
                     }
                 } else {
@@ -238,8 +237,12 @@ impl<K, V> Ctrie<K, V> {
                                     start_gen,
                                 )
                             } else {
-                                println!("asdf");
-                                panic!()
+                                let new_cnode = Owned::new(MainNode::from_ctrie_node(ctrie_node.renewed(start_gen.clone(), &self, Ordering::SeqCst, guard))).into_shared(guard);
+                                if indirection.gcas_main(main_pointer, new_cnode, self, Ordering::SeqCst, guard) {
+                                    self.iinsert(guard, indirection, key, value, level + W, parent, start_gen)
+                                } else {
+                                    IInsertResult::Restart
+                                }
                             }
                         },
                         Branch::Singleton(singleton) => {

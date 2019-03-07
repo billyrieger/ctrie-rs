@@ -23,6 +23,15 @@ where
         }
     }
 
+    pub fn copy_to_gen<'g>(&self, generation: Generation, ctrie: &Ctrie<K, V>, ordering: Ordering, guard: &'g Guard) -> Self {
+        let main = self.gcas_read_main(ctrie, ordering, guard);
+        let new_main = Atomic::from(main);
+        Self {
+            main: new_main,
+            generation
+        }
+    }
+
     pub fn generation(&self) -> &Generation {
         &self.generation
     }
