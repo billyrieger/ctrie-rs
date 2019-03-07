@@ -1,7 +1,6 @@
 use crate::node::{IndirectionNode, SingletonNode};
 use crossbeam::epoch::Guard;
-use std::fmt::Debug;
-use std::hash::Hash;
+use std::{fmt::Debug, hash::Hash};
 
 #[derive(Clone)]
 pub enum Branch<K, V> {

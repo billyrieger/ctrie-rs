@@ -4,6 +4,7 @@ use crate::{
 };
 use crossbeam::epoch::Atomic;
 use std::hash::Hash;
+use std::fmt::Debug;
 
 #[derive(Clone)]
 pub enum MainNodeKind<K, V> {
@@ -20,8 +21,8 @@ pub struct MainNode<K, V> {
 
 impl<K, V> MainNode<K, V>
 where
-    K: Clone + Eq + Hash,
-    V: Clone,
+    K: Clone + Debug + Eq + Hash,
+    V: Clone + Debug,
 {
     pub fn new(
         x: SingletonNode<K, V>,
