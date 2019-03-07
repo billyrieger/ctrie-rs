@@ -1,15 +1,15 @@
-use crossbeam::epoch::Atomic;
+use crossbeam::epoch::{Atomic, Guard, Owned};
 use fxhash::FxHasher;
 use std::{
     fmt::{self, Debug},
-    hash::{BuildHasher, BuildHasherDefault, Hash},
+    hash::{BuildHasher, BuildHasherDefault, Hash, Hasher},
     sync::{atomic::Ordering, Arc},
 };
 
 mod gcas;
 mod node;
 
-use self::node::*;
+use self::{gcas::*, node::*};
 
 /// The ordering to use when loading atomic pointers.
 const LOAD_ORD: Ordering = Ordering::Relaxed;
@@ -36,7 +36,7 @@ impl<V> Value for V where V: Clone {}
 /// A heap-allocated counter to mark Ctrie snapshots.
 /// It's possible to use a integer counter instead, but it could overflow.
 #[derive(Clone)]
-struct Generation {
+pub struct Generation {
     inner: Arc<()>,
 }
 
@@ -92,6 +92,12 @@ where
     V: Value,
     S: BuildHasher,
 {
+    fn hash(&self, key: &K) -> u64 {
+        let mut hasher = self.hash_builder.build_hasher();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }
+
     fn root(&self) -> &Atomic<IndirectionNode<K, V>> {
         &self.root
     }
@@ -99,7 +105,167 @@ where
     fn read_only(&self) -> bool {
         self.read_only
     }
+
+    pub fn with_hasher(hash_builder: S) -> Self {
+        let generation = Generation::new();
+        Self {
+            root: Atomic::new(IndirectionNode::new(Atomic::new(MainNode::from_ctrie_node(CtrieNode::new(0, vec![], generation.clone()))), generation)),
+            read_only: false,
+            hash_builder,
+        }
+    }
+
+    pub fn insert<'g>(&self, key: K, value: V, guard: &'g Guard) {
+        let root_ptr = self.root().load(LOAD_ORD, guard);
+        let root = unsafe { root_ptr.deref() };
+        match self.iinsert(root, key.clone(), value.clone(), 0, root.generation(), guard) {
+            IInsertResult::Ok => {},
+            IInsertResult::Restart => self.insert(key, value, guard),
+        }
+    }
+
+    fn iinsert<'g>(
+        &self,
+        inode: &IndirectionNode<K, V>,
+        key: K,
+        value: V,
+        level: usize,
+        start_generation: &Generation,
+        guard: &'g Guard,
+    ) -> IInsertResult {
+        let main_ptr = gcas_read(inode, self, guard);
+        let main = unsafe { main_ptr.deref() };
+
+        match main.kind() {
+            MainNodeKind::Ctrie(cnode) => {
+                let bitmap = cnode.bitmap();
+                let key_hash = self.hash(&key);
+                let (flag, position) = flag_and_position(key_hash, level, bitmap);
+                if flag & bitmap == 0 {
+                    let renewed_cnode = if cnode.generation() != inode.generation() {
+                        cnode.renewed(inode.generation().clone(), self, guard)
+                    } else {
+                        cnode.clone()
+                    };
+                    let new_main_ptr =
+                        Owned::new(MainNode::from_ctrie_node(renewed_cnode.inserted(
+                            flag,
+                            position,
+                            Branch::Singleton(SingletonNode::new(key, value)),
+                            inode.generation().clone(),
+                        )))
+                        .into_shared(guard);
+                    if gcas(inode, main_ptr, new_main_ptr, self, guard) {
+                        IInsertResult::Ok
+                    } else {
+                        IInsertResult::Restart
+                    }
+                } else {
+                    match cnode.branch(position) {
+                        Branch::Indirection(inode) => {
+                            if start_generation == inode.generation() {
+                                self.iinsert(inode, key, value, level + W, start_generation, guard)
+                            } else {
+                                let renewed_cnode =
+                                    cnode.renewed(start_generation.clone(), self, guard);
+                                let new_main_ptr =
+                                    Owned::new(MainNode::from_ctrie_node(renewed_cnode))
+                                        .into_shared(guard);
+                                if gcas(inode, main_ptr, new_main_ptr, self, guard) {
+                                    self.iinsert(inode, key, value, level, start_generation, guard)
+                                } else {
+                                    IInsertResult::Restart
+                                }
+                            }
+                        }
+                        Branch::Singleton(snode) => {
+                            if snode.key() != &key {
+                                let renewed_cnode = if cnode.generation() != inode.generation() {
+                                    cnode.renewed(inode.generation().clone(), self, guard)
+                                } else {
+                                    cnode.clone()
+                                };
+                                let new_snode = SingletonNode::new(key, value);
+                                let new_main = MainNode::new(
+                                    snode.clone(),
+                                    self.hash(snode.key()),
+                                    new_snode,
+                                    key_hash,
+                                    level + W,
+                                    inode.generation().clone(),
+                                );
+                                let new_inode = IndirectionNode::new(
+                                    Atomic::new(new_main),
+                                    inode.generation().clone(),
+                                );
+                                let new_main_ptr =
+                                    Owned::new(MainNode::from_ctrie_node(renewed_cnode.updated(
+                                        position,
+                                        Branch::Indirection(new_inode),
+                                        inode.generation().clone(),
+                                    )))
+                                    .into_shared(guard);
+                                if gcas(inode, main_ptr, new_main_ptr, self, guard) {
+                                    IInsertResult::Ok
+                                } else {
+                                    IInsertResult::Restart
+                                }
+                            } else {
+                                let new_main_ptr =
+                                    Owned::new(MainNode::from_ctrie_node(cnode.updated(
+                                        position,
+                                        Branch::Singleton(SingletonNode::new(key, value)),
+                                        inode.generation().clone(),
+                                    )))
+                                    .into_shared(guard);
+                                if gcas(inode, main_ptr, new_main_ptr, self, guard) {
+                                    IInsertResult::Ok
+                                } else {
+                                    IInsertResult::Restart
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            MainNodeKind::List(lnode) => unimplemented!(),
+
+            MainNodeKind::Tomb(tnode) => unimplemented!(),
+
+            MainNodeKind::Failed => unimplemented!(),
+        }
+    }
+
+    fn print<'g>(&self, guard: &'g Guard) where K: Debug, V: Debug {
+        println!("ctrie:");
+        let root_ptr = self.root.load(LOAD_ORD, guard);
+        let root = unsafe { root_ptr.deref() };
+        root.print(0, guard);
+    }
+}
+
+enum IInsertResult {
+    Ok,
+    Restart,
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crossbeam::epoch;
+
+    #[test]
+    fn insert() {
+        let ctrie = Ctrie::with_hasher(BuildHasherDefault::<FxHasher>::default());
+
+        let guard = &epoch::pin();
+
+        for i in 0..1000 {
+            ctrie.insert(i, i, guard);
+        }
+
+        ctrie.print(guard);
+    }
+}
+

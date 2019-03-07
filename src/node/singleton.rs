@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 /// A node that represents a single entry in a ctrie.
 ///
 /// Contains a key and a corresponding value.
@@ -21,5 +23,10 @@ impl<K, V> SingletonNode<K, V> {
     /// Returns the value of the singleton node.
     pub fn value(&self) -> &V {
         &self.value
+    }
+
+    pub fn print(&self, indent: usize) where K: Debug, V: Debug {
+        let tab = std::iter::repeat(' ').take(indent).collect::<String>();
+        println!("{}snode: ({:?}, {:?})", tab, self.key, self.value);
     }
 }

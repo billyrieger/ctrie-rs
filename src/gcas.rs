@@ -3,17 +3,19 @@ use crate::{
     Ctrie, Key, Value, CAS_ORD, LOAD_ORD, STORE_ORD,
 };
 use crossbeam::epoch::{Atomic, Guard, Owned, Shared};
+use std::hash::BuildHasher;
 
-fn gcas<'g, K, V>(
+pub fn gcas<'g, K, V, S>(
     inode: &IndirectionNode<K, V>,
     old_ptr: Shared<MainNode<K, V>>,
     new_ptr: Shared<MainNode<K, V>>,
-    ctrie: &Ctrie<K, V>,
+    ctrie: &Ctrie<K, V, S>,
     guard: &'g Guard,
 ) -> bool
 where
     K: Key,
     V: Value,
+    S: BuildHasher,
 {
     let new = unsafe { new_ptr.deref() };
 
@@ -32,14 +34,15 @@ where
     }
 }
 
-fn gcas_read<'g, K, V>(
+pub fn gcas_read<'g, K, V, S>(
     inode: &IndirectionNode<K, V>,
-    ctrie: &Ctrie<K, V>,
+    ctrie: &Ctrie<K, V, S>,
     guard: &'g Guard,
 ) -> Shared<'g, MainNode<K, V>>
 where
     K: Key,
     V: Value,
+    S: BuildHasher,
 {
     // load main
     let main_ptr = inode.main().load(LOAD_ORD, guard);
@@ -50,21 +53,22 @@ where
     // load main.prev
     let main_prev_ptr = main.prev().load(LOAD_ORD, guard);
     if main_prev_ptr.is_null() {
-        main_prev_ptr
+        main_ptr
     } else {
         gcas_commit(inode, main_ptr, ctrie, guard)
     }
 }
 
-fn gcas_commit<'g, K, V>(
+pub fn gcas_commit<'g, K, V, S>(
     inode: &IndirectionNode<K, V>,
     main_ptr: Shared<'g, MainNode<K, V>>,
-    ctrie: &Ctrie<K, V>,
+    ctrie: &Ctrie<K, V, S>,
     guard: &'g Guard,
 ) -> Shared<'g, MainNode<K, V>>
 where
     K: Key,
     V: Value,
+    S: BuildHasher,
 {
     // main pointer of inode is never null
     let main = unsafe { main_ptr.deref() };
