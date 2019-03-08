@@ -11,6 +11,10 @@ pub enum Branch<K, V> {
     Singleton(SingletonNode<K, V>),
 }
 
+/// A Ctrie node (c-node).
+///
+/// Maintains the invariant that the number of 1s in the bitmap is equal to the length of the
+/// branch array.
 #[derive(Clone)]
 pub struct CtrieNode<K, V> {
     bitmap: u64,
@@ -23,6 +27,7 @@ where
     K: Key,
     V: Value,
 {
+    /// Creates a new C-node with the given bitmap, array, and generation.
     pub fn new(bitmap: u64, array: Vec<Branch<K, V>>, generation: Generation) -> Self {
         Self {
             bitmap,
@@ -31,6 +36,7 @@ where
         }
     }
 
+    /// Inserts a branch into the C-node, returning a new node.
     pub fn inserted(
         &self,
         flag: u64,
@@ -47,6 +53,7 @@ where
         }
     }
 
+    /// Updates a position in the C-node with a new branch, returning a new node.
     pub fn updated(&self, position: usize, branch: Branch<K, V>, generation: Generation) -> Self {
         let mut new_array = self.array.clone();
         new_array[position] = branch;

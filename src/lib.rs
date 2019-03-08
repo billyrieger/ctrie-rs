@@ -251,6 +251,66 @@ where
         }
     }
 
+    pub fn lookup<'g>(&self, key: &K, guard: &'g Guard) -> Option<&'g V> where K: 'g {
+        let root_ptr = self.root.load(LOAD_ORD, guard);
+        let root = unsafe { root_ptr.deref() };
+        match self.ilookup(root, key, 0, root.generation(), guard) {
+            ILookupResult::Value(v) => Some(v),
+            ILookupResult::NotFound => None,
+            ILookupResult::Restart => self.lookup(key, guard),
+        }
+    }
+
+    fn ilookup<'g>(&self, inode: &IndirectionNode<K, V>, key: &K, level: usize, start_generation: &Generation, guard: &'g Guard) -> ILookupResult<'g, V> where K: 'g {
+        let main_ptr = gcas_read(inode, self, guard);
+        let main = unsafe { main_ptr.deref() };
+
+        match main.kind() {
+            MainNodeKind::Ctrie(cnode) => {
+                let bitmap = cnode.bitmap();
+                let key_hash = self.hash(&key);
+                let (flag, position) = flag_and_position(key_hash, level, bitmap);
+                if flag & bitmap == 0 {
+                    ILookupResult::NotFound
+                } else {
+                    match cnode.branch(position) {
+                        Branch::Indirection(new_inode) => {
+                            if self.read_only || start_generation == new_inode.generation() {
+                                self.ilookup(new_inode, key, level + W, start_generation, guard)
+                            } else {
+                                let new_main_ptr = Owned::new(MainNode::from_ctrie_node(cnode.renewed(start_generation.clone(), self, guard))).into_shared(guard);
+                                if gcas(inode, main_ptr, new_main_ptr, self, guard) {
+                                    self.ilookup(inode, key, level, start_generation, guard)
+                                } else {
+                                    ILookupResult::Restart
+                                }
+                            }
+                        }
+                        Branch::Singleton(snode) => {
+                            if snode.key() == key {
+                                ILookupResult::Value(snode.value())
+                            } else {
+                                ILookupResult::NotFound
+                            }
+                        }
+                    }
+                }
+            }
+
+            MainNodeKind::List(lnode) => {
+                unimplemented!()
+            }
+
+            MainNodeKind::Tomb(tnode) => {
+                unimplemented!()
+            }
+
+            MainNodeKind::Failed => {
+                unimplemented!()
+            }
+        }
+    }
+
     fn print<'g>(&self, guard: &'g Guard)
     where
         K: Debug,
@@ -268,6 +328,12 @@ enum IInsertResult {
     Restart,
 }
 
+enum ILookupResult<'g, V> {
+    Value(&'g V),
+    NotFound,
+    Restart,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,8 +345,13 @@ mod tests {
 
         let guard = &epoch::pin();
 
-        for i in 0..1000 {
-            ctrie.insert(i, i, guard);
+        for i in (0..1000).map(|i| i * 2) {
+            ctrie.insert(i, i * 3, guard);
+        }
+
+        for i in (0..1000).map(|i| i * 2) {
+            assert_eq!(ctrie.lookup(&i, guard), Some(&(i * 3)));
+            assert_eq!(ctrie.lookup(&(i + 1), guard), None);
         }
 
         ctrie.print(guard);
