@@ -86,6 +86,28 @@ pub struct Ctrie<K, V, S = BuildHasherDefault<FxHasher>> {
     hash_builder: S,
 }
 
+impl<K, V> Ctrie<K, V>
+where
+    K: Key,
+    V: Value,
+{
+    pub fn new() -> Self {
+        let generation = Generation::new();
+        Self {
+            root: Atomic::new(IndirectionNode::new(
+                Atomic::new(MainNode::from_ctrie_node(CtrieNode::new(
+                    0,
+                    vec![],
+                    generation.clone(),
+                ))),
+                generation,
+            )),
+            read_only: false,
+            hash_builder: BuildHasherDefault::<FxHasher>::default(),
+        }
+    }
+}
+
 impl<K, V, S> Ctrie<K, V, S>
 where
     K: Key,
@@ -251,7 +273,10 @@ where
         }
     }
 
-    pub fn lookup<'g>(&self, key: &K, guard: &'g Guard) -> Option<&'g V> where K: 'g {
+    pub fn lookup<'g>(&self, key: &K, guard: &'g Guard) -> Option<&'g V>
+    where
+        K: 'g,
+    {
         let root_ptr = self.root.load(LOAD_ORD, guard);
         let root = unsafe { root_ptr.deref() };
         match self.ilookup(root, key, 0, root.generation(), guard) {
@@ -261,7 +286,17 @@ where
         }
     }
 
-    fn ilookup<'g>(&self, inode: &IndirectionNode<K, V>, key: &K, level: usize, start_generation: &Generation, guard: &'g Guard) -> ILookupResult<'g, V> where K: 'g {
+    fn ilookup<'g>(
+        &self,
+        inode: &IndirectionNode<K, V>,
+        key: &K,
+        level: usize,
+        start_generation: &Generation,
+        guard: &'g Guard,
+    ) -> ILookupResult<'g, V>
+    where
+        K: 'g,
+    {
         let main_ptr = gcas_read(inode, self, guard);
         let main = unsafe { main_ptr.deref() };
 
@@ -278,7 +313,10 @@ where
                             if self.read_only || start_generation == new_inode.generation() {
                                 self.ilookup(new_inode, key, level + W, start_generation, guard)
                             } else {
-                                let new_main_ptr = Owned::new(MainNode::from_ctrie_node(cnode.renewed(start_generation.clone(), self, guard))).into_shared(guard);
+                                let new_main_ptr = Owned::new(MainNode::from_ctrie_node(
+                                    cnode.renewed(start_generation.clone(), self, guard),
+                                ))
+                                .into_shared(guard);
                                 if gcas(inode, main_ptr, new_main_ptr, self, guard) {
                                     self.ilookup(inode, key, level, start_generation, guard)
                                 } else {
@@ -297,17 +335,11 @@ where
                 }
             }
 
-            MainNodeKind::List(lnode) => {
-                unimplemented!()
-            }
+            MainNodeKind::List(lnode) => unimplemented!(),
 
-            MainNodeKind::Tomb(tnode) => {
-                unimplemented!()
-            }
+            MainNodeKind::Tomb(tnode) => unimplemented!(),
 
-            MainNodeKind::Failed => {
-                unimplemented!()
-            }
+            MainNodeKind::Failed => unimplemented!(),
         }
     }
 
@@ -340,9 +372,8 @@ mod tests {
     use crossbeam::epoch;
 
     #[test]
-    fn insert() {
-        let ctrie = Ctrie::with_hasher(BuildHasherDefault::<FxHasher>::default());
-
+    fn insert_lookup() {
+        let ctrie = Ctrie::new();
         let guard = &epoch::pin();
 
         for i in (0..1000).map(|i| i * 2) {
