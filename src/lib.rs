@@ -92,19 +92,7 @@ where
     V: Value,
 {
     pub fn new() -> Self {
-        let generation = Generation::new();
-        Self {
-            root: Atomic::new(IndirectionNode::new(
-                Atomic::new(MainNode::from_ctrie_node(CtrieNode::new(
-                    0,
-                    vec![],
-                    generation.clone(),
-                ))),
-                generation,
-            )),
-            read_only: false,
-            hash_builder: BuildHasherDefault::<FxHasher>::default(),
-        }
+        Self::with_hasher(BuildHasherDefault::<FxHasher>::default())
     }
 }
 
@@ -114,20 +102,6 @@ where
     V: Value,
     S: BuildHasher,
 {
-    fn hash(&self, key: &K) -> u64 {
-        let mut hasher = self.hash_builder.build_hasher();
-        key.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    fn root(&self) -> &Atomic<IndirectionNode<K, V>> {
-        &self.root
-    }
-
-    fn read_only(&self) -> bool {
-        self.read_only
-    }
-
     pub fn with_hasher(hash_builder: S) -> Self {
         let generation = Generation::new();
         Self {
@@ -142,6 +116,19 @@ where
             read_only: false,
             hash_builder,
         }
+    }
+    fn hash(&self, key: &K) -> u64 {
+        let mut hasher = self.hash_builder.build_hasher();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn root(&self) -> &Atomic<IndirectionNode<K, V>> {
+        &self.root
+    }
+
+    fn read_only(&self) -> bool {
+        self.read_only
     }
 
     pub fn insert<'g>(&self, key: K, value: V, guard: &'g Guard) {
@@ -169,6 +156,7 @@ where
         start_generation: &Generation,
         guard: &'g Guard,
     ) -> IInsertResult {
+        // read the main pointer of the i-node
         let main_ptr = gcas_read(inode, self, guard);
         let main = unsafe { main_ptr.deref() };
 
@@ -297,14 +285,17 @@ where
     where
         K: 'g,
     {
+        // read the main pointer of the i-node
         let main_ptr = gcas_read(inode, self, guard);
         let main = unsafe { main_ptr.deref() };
 
         match main.kind() {
             MainNodeKind::Ctrie(cnode) => {
+                // if the main node is a c-node, calculate the flag and array position
                 let bitmap = cnode.bitmap();
                 let key_hash = self.hash(&key);
                 let (flag, position) = flag_and_position(key_hash, level, bitmap);
+
                 if flag & bitmap == 0 {
                     ILookupResult::NotFound
                 } else {
@@ -325,6 +316,7 @@ where
                             }
                         }
                         Branch::Singleton(snode) => {
+                            // if the branch is a s-node, simply check if the keys match
                             if snode.key() == key {
                                 ILookupResult::Value(snode.value())
                             } else {
@@ -335,7 +327,14 @@ where
                 }
             }
 
-            MainNodeKind::List(lnode) => unimplemented!(),
+            MainNodeKind::List(lnode) => {
+                // if the main node is an l-node, lookup the key in the linked list
+                if let Some(value) = lnode.lookup(key, guard) {
+                    ILookupResult::Value(value)
+                } else {
+                    ILookupResult::NotFound
+                }
+            }
 
             MainNodeKind::Tomb(tnode) => unimplemented!(),
 

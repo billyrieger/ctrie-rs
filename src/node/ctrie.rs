@@ -11,7 +11,7 @@ pub enum Branch<K, V> {
     Singleton(SingletonNode<K, V>),
 }
 
-/// A Ctrie node (c-node).
+/// A Ctrie node (C-node).
 ///
 /// Maintains the invariant that the number of 1s in the bitmap is equal to the length of the
 /// branch array.

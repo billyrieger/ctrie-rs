@@ -12,6 +12,7 @@ where
     K: Key,
     V: Value,
 {
+    /// Creates a new i-node with the given main pointer and generation.
     pub fn new(main: Atomic<MainNode<K, V>>, generation: Generation) -> Self {
         Self { main, generation }
     }
