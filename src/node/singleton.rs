@@ -1,6 +1,8 @@
+use crate::{
+    node::{MainNode, TombNode},
+    Key, Value,
+};
 use std::fmt::Debug;
-use crate::node::{TombNode, MainNode};
-use crate::{Key, Value};
 
 /// A node that represents a single entry in a ctrie.
 ///
@@ -11,7 +13,11 @@ pub struct SingletonNode<K, V> {
     value: V,
 }
 
-impl<K, V> SingletonNode<K, V> where K: Key, V: Value {
+impl<K, V> SingletonNode<K, V>
+where
+    K: Key,
+    V: Value,
+{
     /// Creates a new singleton node with the given key and value.
     pub fn new(key: K, value: V) -> Self {
         Self { key, value }

@@ -80,22 +80,31 @@ fn flag_and_position(hash: u64, level: usize, bitmap: u64) -> (u64, usize) {
     (flag, position)
 }
 
-pub fn entomb<K, V>(snode: SingletonNode<K, V>) -> MainNode<K, V> where K: Key, V: Value {
+pub fn entomb<K, V>(snode: SingletonNode<K, V>) -> MainNode<K, V>
+where
+    K: Key,
+    V: Value,
+{
     MainNode::from_tomb_node(TombNode::new(snode))
 }
 
-pub fn resurrect<K, V>(inode: IndirectionNode<K, V>, main: &MainNode<K, V>) -> Branch<K, V> where K: Key, V: Value {
+pub fn resurrect<K, V>(inode: IndirectionNode<K, V>, main: &MainNode<K, V>) -> Branch<K, V>
+where
+    K: Key,
+    V: Value,
+{
     match main.kind() {
-        MainNodeKind::Tomb(tnode) => {
-            Branch::Singleton(tnode.untombed())
-        }
-        _ => {
-            Branch::Indirection(inode)
-        }
+        MainNodeKind::Tomb(tnode) => Branch::Singleton(tnode.untombed()),
+        _ => Branch::Indirection(inode),
     }
 }
 
-fn to_compressed<'g, K, V>(cnode: &CtrieNode<K, V>, level: u64, generation: Generation, guard: &'g Guard) -> MainNode<K, V>
+fn to_compressed<'g, K, V>(
+    cnode: &CtrieNode<K, V>,
+    level: u64,
+    generation: Generation,
+    guard: &'g Guard,
+) -> MainNode<K, V>
 where
     K: Key,
     V: Value,
@@ -106,9 +115,7 @@ where
             Branch::Singleton(snode) => {
                 new_array.push(Branch::Singleton(snode.clone()));
             }
-            Branch::Indirection(inode) => {
-                unimplemented!()
-            }
+            Branch::Indirection(inode) => unimplemented!(),
         }
     }
     let new_cnode = CtrieNode::new(cnode.bitmap(), new_array, generation);
