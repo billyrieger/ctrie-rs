@@ -67,10 +67,10 @@ impl PartialEq for Generation {
 }
 
 fn flag_and_position(hash: u64, level: usize, bitmap: u64) -> (u64, usize) {
-    // extract W = 6 bits from the hash, skipping the first `level` bits
+    // extract W = 6 bits from the hash, skipping the first level bits
     let index = (hash >> level) & LAST_W_BITS;
 
-    // flag is the position in the bitmap corresponding to the hash+level
+    // flag is the position in the bitmap corresponding to the index
     // index is guaranteed to be less than 2^W = 64, so this cannot overflow
     let flag = 1u64 << index;
 
@@ -78,6 +78,41 @@ fn flag_and_position(hash: u64, level: usize, bitmap: u64) -> (u64, usize) {
     let position = (bitmap & (flag - 1)).count_ones() as usize;
 
     (flag, position)
+}
+
+pub fn entomb<K, V>(snode: SingletonNode<K, V>) -> MainNode<K, V> where K: Key, V: Value {
+    MainNode::from_tomb_node(TombNode::new(snode))
+}
+
+pub fn resurrect<K, V>(inode: IndirectionNode<K, V>, main: &MainNode<K, V>) -> Branch<K, V> where K: Key, V: Value {
+    match main.kind() {
+        MainNodeKind::Tomb(tnode) => {
+            Branch::Singleton(tnode.untombed())
+        }
+        _ => {
+            Branch::Indirection(inode)
+        }
+    }
+}
+
+fn to_compressed<'g, K, V>(cnode: &CtrieNode<K, V>, level: u64, generation: Generation, guard: &'g Guard) -> MainNode<K, V>
+where
+    K: Key,
+    V: Value,
+{
+    let mut new_array = Vec::with_capacity(cnode.branches());
+    for i in 0..cnode.branches() {
+        match cnode.branch(i) {
+            Branch::Singleton(snode) => {
+                new_array.push(Branch::Singleton(snode.clone()));
+            }
+            Branch::Indirection(inode) => {
+                unimplemented!()
+            }
+        }
+    }
+    let new_cnode = CtrieNode::new(cnode.bitmap(), new_array, generation);
+    new_cnode.to_contracted(level)
 }
 
 pub struct Ctrie<K, V, S = BuildHasherDefault<FxHasher>> {
@@ -117,6 +152,7 @@ where
             hash_builder,
         }
     }
+
     fn hash(&self, key: &K) -> u64 {
         let mut hasher = self.hash_builder.build_hasher();
         key.hash(&mut hasher);
@@ -292,13 +328,17 @@ where
         match main.kind() {
             MainNodeKind::Ctrie(cnode) => {
                 // if the main node is a c-node, calculate the flag and array position
+                // corresponding to the key
                 let bitmap = cnode.bitmap();
                 let key_hash = self.hash(&key);
                 let (flag, position) = flag_and_position(key_hash, level, bitmap);
 
                 if flag & bitmap == 0 {
+                    // if the bitmap doesn't contain the relevant bit, the key is not present in
+                    // the ctrie
                     ILookupResult::NotFound
                 } else {
+                    // otherwise, check the branch at the relevant position in the branch array
                     match cnode.branch(position) {
                         Branch::Indirection(new_inode) => {
                             if self.read_only || start_generation == new_inode.generation() {

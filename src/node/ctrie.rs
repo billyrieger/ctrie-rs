@@ -1,5 +1,5 @@
 use crate::{
-    node::{IndirectionNode, SingletonNode},
+    node::{IndirectionNode, MainNode, SingletonNode},
     Ctrie, Generation, Key, Value,
 };
 use crossbeam::epoch::Guard;
@@ -86,8 +86,27 @@ where
         }
     }
 
+    pub fn to_contracted(&self, level: u64) -> MainNode<K, V>
+    where
+        K: Key,
+        V: Value,
+    {
+        if level > 0 && self.array.len() == 1 {
+            match &self.array[0] {
+                Branch::Singleton(snode) => snode.entomb(),
+                Branch::Indirection(_) => MainNode::from_ctrie_node(self.clone()),
+            }
+        } else {
+            MainNode::from_ctrie_node(self.clone())
+        }
+    }
+
     pub fn branch(&self, position: usize) -> &Branch<K, V> {
         &self.array[position]
+    }
+
+    pub fn branches(&self) -> usize {
+        self.array.len()
     }
 
     pub fn bitmap(&self) -> u64 {
