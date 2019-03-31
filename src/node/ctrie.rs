@@ -72,12 +72,13 @@ where
     ) -> Self {
         let mut new_array = Vec::with_capacity(self.array.len());
         for branch in &self.array {
-            match branch {
-                Branch::Indirection(inode) => new_array.push(Branch::Indirection(
-                    inode.copy_to_generation(generation.clone(), ctrie, guard),
-                )),
-                Branch::Singleton(snode) => new_array.push(Branch::Singleton(snode.clone())),
-            }
+            let new_branch = match branch {
+                Branch::Indirection(inode) => {
+                    Branch::Indirection(inode.copy_to_generation(generation.clone(), ctrie, guard))
+                }
+                Branch::Singleton(snode) => Branch::Singleton(snode.clone()),
+            };
+            new_array.push(new_branch);
         }
         Self {
             array: new_array,
